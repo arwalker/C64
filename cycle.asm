@@ -1,11 +1,14 @@
 	processor 6502
 	org $c000       ; 49152
 
-screen  equ $0400       ; Start 1000 bytes for screen character values
-colmap  equ $d800       ; Start 1000 bytes for setting foreground color of chars
+screen  equ $05e0       ; Start 1000 bytes for screen character values
+colmap  equ $d9e0       ; Start 1000 bytes for setting foreground color of chars
 
 cmapoff equ $fb         ; Offset for color map
 startcol equ $fd        ; Color table multiplier
+baroff  equ $00        ; Raster bar offset for sin pos
+
+
 
         jsr $e544       ; Clear screen with kernal clear routine
         lda #00         ; Load accumulator with black color code
@@ -31,12 +34,12 @@ strloop:
         and $d011       ; AND accumulator value with contents of mem at d011 (screen control register)
         sta $d011       ; Store that value back to d011, so clearing high bit (raster line bit)
 
-        ldy #50         ; Load y register with 50 decimal, first 'screen' area line
+        ldy #00         ; Load y register with 50 decimal, first 'screen' area line
         sty $d012       ; Store 50 at d012, contents of which is where interrupt should occur
 
-        lda #<widetop   ; Store low byte of address of interrupt routine address
+        lda #<cycle   ; Store low byte of address of interrupt routine address
         sta $0314       ; at interrupt vector
-        ldx #>widetop   ; Store high byte of address of routine
+        ldx #>cycle   ; Store high byte of address of routine
         stx $0315       ; at interrupt vector
 
         lda #$01        ; Load accumulator with 1 %00000001
@@ -70,37 +73,87 @@ nextchar:
         sta startcol    ; Store accumulator value at startcol location
 
 return:
+        ldx baroff      ; Load x with current bar offset
+        lda bar,x       ; Load accumulator with value in bar lookup at x offset
+        adc #96         ; Add 50 to accumulator value
+        sta ras1
+        adc #58
+        sta ras2
+        inx
+        stx baroff
+        cpx #49         ; Compare x to 49, are we at end of bar lookup?
+        bne setwt       ; 
+        lda #00
+        sta baroff
+setwt:
         ;jmp $ea31
         lda #<widetop   ; Set low byte of next interrupt address
         sta $0314
         lda #>widetop   ; Set high byte
         sta $0315
-        
-        ldy #50        ; Line to start next interrupt
-        sty $d012       ; Store 50 at d012, contents of which is where interrupt should occur
 
-        asl $d019       ; Shift left at d019, clearing interrupt flag
-        jmp $ea31       ; Jump back to kernal interrupt processing
-widetop:
-        jsr latch      ; Wait 22 cycles... jsr is 6, so 28?
-        lda #07         ; Load accumulator with 07 color yellow
-        sta $d020       ; Set border to accumulator value
-        sta $d021       ; Set background to accumulator value
-
-        lda #<widemid   ; Set low byte of next interrupt address
-        sta $0314
-        lda #>widemid   ; Set high byte
-        sta $0315
-        
-        ldy #100        ; Line to start next interrupt
+        ldy ras1          ; Line to start next interrupt
         sty $d012       ; Store 50 at d012, contents of which is where interrupt should occur
 
         asl $d019       ; Shift left at d019, clearing interrupt flag
         jmp $ea81       ; Jump back to kernal interrupt processing
 
-widemid:
+scroll:
+        ldx sdelay
+        dex
+        bne continue
+
+        lda soff
+        sbc #01
+        and #07
+        bne cscroll
+
+        lda #07
+cscroll:
+        sta soff
+
+        lda $d016
+        and #248
+        adc soff
+        sta $d016
+
+        ldx #02
+continue:
+        stx sdelay
+
+        lda #<widetop   ; Set low byte of next interrupt address
+        sta $0314
+        lda #>widetop   ; Set high byte
+        sta $0315
+
+        ldy ras1        ; Line to start next interrupt
+        sty $d012       ; Store 50 at d012, contents of which is where interrupt should occur
+
+        asl $d019
+        jmp $ea81
+
+shiftrow:
+        ldx $00
+        lda $05e1,x
+        sta $05e0,x
+        inx
+        cpx #39
+        bne shiftrow+2
+
+        lda #<widetop   ; Set low byte of next interrupt address
+        sta $0314
+        lda #>widetop   ; Set high byte
+        sta $0315
+
+        ldy ras1        ; Line to start next interrupt
+        sty $d012       ; Store 50 at d012, contents of which is where interrupt should occur
+
+        asl $d019
+        jmp $ea81
+
+widetop:
         jsr latch      ; Wait 22 cycles... jsr is 6, so 28?
-        lda #11         ; Load accumulator with 11
+        lda #01         ; Load accumulator with 07 color yellow
         sta $d020       ; Set border to accumulator value
         sta $d021       ; Set background to accumulator value
 
@@ -109,7 +162,7 @@ widemid:
         lda #>widebot   ; Set high byte
         sta $0315
         
-        ldy #200        ; Line to start next interrupt
+        ldy ras2        ; Line to start next interrupt
         sty $d012       ; Store 50 at d012, contents of which is where interrupt should occur
 
         asl $d019       ; Shift left at d019, clearing interrupt flag
@@ -117,7 +170,7 @@ widemid:
 
 widebot:
         jsr latch       ; Wait 22 cycles... jsr is 6, so 28
-        lda #10         ; Load accumulator with 10 color yellow
+        lda #00         ; Load accumulator with 10 color yellow
         sta $d020       ; Set border to accumulator value
         sta $d021       ; Set background to accumulator value
 
@@ -131,9 +184,7 @@ widebot:
 
         asl $d019       ; Shift left at d019, clearing interrupt flag
         ;jmp $ea81       ; Jump back to kernal interrupt processing
-        jmp $ea81       ; Jump back to kernal interrupt processing
-
-
+        jmp $ea31       ; Jump back to kernal interrupt processing
 
 latch:  ldx #02            ; 2 cycles
 lp:     dex              ; 2 cycles
@@ -147,3 +198,15 @@ text:   dc.b 41, 41, 41, 32, 32, 45, 45, 45
         dc.b 45, 45, 32, 32, 40, 40, 40, 00
 colors: dc.b 9, 41, 41, 32, 32, 45, 45, 45
 delay:  dc.b 00
+roff:   dc.b 05
+bar:    dc.b 0, 0, 1, 2, 4, 6, 8, 10
+        dc.b 13, 16, 19, 22, 25, 28, 31, 34
+        dc.b 37, 40, 42, 44, 46, 48, 49, 50
+        dc.b 50, 50, 50, 49, 48, 46, 44, 42
+        dc.b 40, 37, 34, 31, 28, 25, 22, 19
+        dc.b 16, 13, 10, 8, 6, 4, 2, 1
+        dc.b 0, 0
+ras1:   dc.b 75
+ras2:   dc.b 125
+sdelay: dc.b 02
+soff:   dc.b 07
